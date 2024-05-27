@@ -2,8 +2,8 @@
 
 ## 简单的定时任务调度器
 ## A simple timed task scheduler
-### 支持cron任务和普通定时任务
-### Supports cron tasks and regular scheduled tasks
+### 支持秒级cron任务和普通定时任务
+### Supports second level cron tasks and regular scheduled tasks
 
 ***
 

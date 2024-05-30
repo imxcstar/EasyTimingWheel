@@ -63,11 +63,13 @@ namespace EasyTimingWheel
             return new TimingWheel[] { tw_Y, tw_M, tw_D, tw_h, tw_m, tw_s };
         }
 
-        public async Task StartLoopAsync()
+        public async Task StartLoopAsync(CancellationToken cancellationToken)
         {
             while (true)
             {
-                await Task.Delay(1000);
+                if (cancellationToken.IsCancellationRequested)
+                    return;
+                await Task.Delay(1000, cancellationToken);
                 var nDate = DateTimeOffset.Now;
                 var cdateTime = GetClockDateTime();
                 var c = (int)(nDate - cdateTime).TotalSeconds;

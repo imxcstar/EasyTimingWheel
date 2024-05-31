@@ -16,5 +16,7 @@ etwM.AddTask(new TimingWheelTask($"test_2", 3, (task, param) =>
     Console.WriteLine($"({dateTime:yyyy-MM-dd HH:mm:ss.fff}, Now: {DateTime.Now:yyyy-MM-dd HH:mm:ss.fff}): {task.Name}");
 }));
 
+var canSource = new CancellationTokenSource();
+
 etwM.TimeSync();
-await etwM.StartLoopAsync();
+await etwM.StartLoopAsync(canSource.Token);

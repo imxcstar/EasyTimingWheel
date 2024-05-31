@@ -1,5 +1,7 @@
 ﻿using EasyTimingCloud.Controllers;
+using EasyTimingCloud.Entities;
 using EasyTimingWheel;
+using FreeSql;
 using System.ComponentModel;
 
 namespace EasyTimingCloud

@@ -17,8 +17,11 @@ namespace EasyTimingWheel
         private TimingWheel tw_M;
         private TimingWheel tw_Y;
 
+        private ConcurrentDictionary<string, ITimingWheelTask> _tasks;
+
         public EasyTimingWheelManager()
         {
+            _tasks = new ConcurrentDictionary<string, ITimingWheelTask>();
             var now = DateTime.Now;
             tw_s = new TimingWheel(60);
             tw_m = new TimingWheel(60);
@@ -81,9 +84,27 @@ namespace EasyTimingWheel
             }
         }
 
+        public List<ITimingWheelTask> GetTasks()
+        {
+            return _tasks.Values.ToList();
+        }
+
         public void AddTask(ITimingWheelTask task)
         {
+            _tasks.TryAdd(task.ID, task);
             tw_Y.AddTask(task);
+        }
+
+        public ITimingWheelTask? GetTask(string id)
+        {
+            _tasks.TryGetValue(id, out var task);
+            return task;
+        }
+
+        public void RemoveTask(string id)
+        {
+            _tasks.TryRemove(id, out var task);
+            task?.Cancel();
         }
     }
 
@@ -179,18 +200,15 @@ namespace EasyTimingWheel
                         {
                             try
                             {
-                                if (!task.IsCancel())
+                                Task.Run(() =>
                                 {
-                                    Task.Run(() =>
-                                    {
-                                        task.TaskCallback?.Invoke(task, task.TaskValue);
-                                    });
-                                    if (task.InitAddClock != null)
-                                    {
-                                        task.SlotPointList = null;
-                                        task.SlotPointIndex = 0;
-                                        task.InitAddClock.AddTask(task);
-                                    }
+                                    task.TaskCallback?.Invoke(task, task.TaskValue);
+                                });
+                                if (task.InitAddClock != null)
+                                {
+                                    task.SlotPointList = null;
+                                    task.SlotPointIndex = 0;
+                                    task.InitAddClock.AddTask(task);
                                 }
                             }
                             catch (Exception)

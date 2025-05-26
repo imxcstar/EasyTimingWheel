@@ -35,7 +35,7 @@ namespace EasyTimingWheel
                 }
             };
             tw_M = new TimingWheel(12);
-            tw_Y = new TimingWheel(100);
+            tw_Y = new TimingWheel(10000);
             tw_s.AddSubClock(tw_m);
             tw_m.AddSubClock(tw_h);
             tw_h.AddSubClock(tw_D);
@@ -58,7 +58,8 @@ namespace EasyTimingWheel
 
         public DateTime GetClockDateTime()
         {
-            return new DateTime(tw_Y.Point, tw_M.Point, tw_D.Point, tw_h.Point, tw_m.Point, tw_s.Point, DateTimeKind.Local);
+            return new DateTime(tw_Y.Point, tw_M.Point, tw_D.Point, tw_h.Point, tw_m.Point, tw_s.Point,
+                DateTimeKind.Local);
         }
 
         public ITimingWheel[] GetClockChain()
@@ -140,7 +141,8 @@ namespace EasyTimingWheel
         protected ConcurrentBag<ITimingWheel> SubClock { get; set; } = new ConcurrentBag<ITimingWheel>();
         protected ConcurrentQueue<ITimingWheelTask>[] TaskSlots { get; set; }
 
-        protected ConcurrentQueue<ITimingWheelTask> WaitAddTaskSlot { get; set; } = new ConcurrentQueue<ITimingWheelTask>();
+        protected ConcurrentQueue<ITimingWheelTask> WaitAddTaskSlot { get; set; } =
+            new ConcurrentQueue<ITimingWheelTask>();
 
         public TimingWheel(int total = 60, int? slotMax = null)
         {
@@ -174,6 +176,7 @@ namespace EasyTimingWheel
             {
                 OnReset?.Invoke(this);
             }
+
             CallAddTask();
             Set(Point + Interval);
             CallTaskEvent();
@@ -182,77 +185,72 @@ namespace EasyTimingWheel
         protected virtual void CallTaskEvent()
         {
             var tasklist = TaskSlots[Point];
-            var len = tasklist.Count;
-            if (len <= 0) return;
-            Parallel.For(0, len, i =>
+            while (tasklist.TryDequeue(out var task))
             {
-                ITimingWheelTask? task;
-                if (tasklist.TryDequeue(out task))
+                if (task.IsCancel())
+                    continue;
+                if (ParentClock != null && task.SlotPointIndex - 1 >= 0 && task.SlotPointList != null &&
+                    task.SlotPointList.Count > 0 && task.SlotPointList[task.SlotPointIndex - 1] != 0)
                 {
-                    if (task != null && !task.IsCancel())
-                    {
-                        if (ParentClock != null && task.SlotPointIndex - 1 >= 0 && task.SlotPointList != null && task.SlotPointList.Any() && task.SlotPointList[task.SlotPointIndex - 1] != 0)
-                        {
-                            task.SlotPointIndex--;
-                            ParentClock.AddWaitTask(task);
-                        }
-                        else
-                        {
-                            try
-                            {
-                                Task.Run(() =>
-                                {
-                                    task.TaskCallback?.Invoke(task, task.TaskValue);
-                                });
-                                if (task.InitAddClock != null)
-                                {
-                                    task.SlotPointList = null;
-                                    task.SlotPointIndex = 0;
-                                    task.InitAddClock.AddTask(task);
-                                }
-                            }
-                            catch (Exception)
-                            {
-                            }
-                        }
-                    }
+                    task.SlotPointIndex--;
+                    ParentClock.AddWaitTask(task);
                 }
-            });
+                else
+                {
+                    var currentTask = task;
+                    Task.Run(() =>
+                    {
+                        try
+                        {
+                            currentTask.TaskCallback?.Invoke(currentTask, currentTask.TaskValue);
+                        }
+                        catch (Exception e)
+                        {
+                            currentTask.TaskExceptionCallback?.Invoke(e);
+                        }
+                        finally
+                        {
+                            if (currentTask is TimingWheelCronTask cronTask)
+                            {
+                                cronTask.UpdateNextInterval();
+                            }
+
+                            if (currentTask.InitAddClock != null)
+                            {
+                                currentTask.SlotPointList = null;
+                                currentTask.SlotPointIndex = 0;
+                                currentTask.InitAddClock.AddTask(currentTask);
+                            }
+                        }
+                    });
+                }
+            }
         }
 
         protected virtual void CallAddTask()
         {
-            var len = WaitAddTaskSlot.Count;
-            if (len <= 0) return;
             var tpoint = Point;
-            Parallel.For(0, len, i =>
+            while (WaitAddTaskSlot.TryDequeue(out var task))
             {
-                ITimingWheelTask? task;
-                if (WaitAddTaskSlot.TryDequeue(out task))
+                var new_point = task.StepInterval;
+                if (task.SlotPointList == null)
                 {
-                    if (task != null)
+                    if (new_point + tpoint >= Total)
                     {
-                        var new_point = task.StepInterval;
-                        if (task.SlotPointList == null)
-                        {
-                            if (new_point + tpoint >= Total)
-                            {
-                                new_point = new_point + tpoint - Total;
-                            }
-                            else
-                            {
-                                new_point += tpoint;
-                            }
-                        }
-                        else
-                        {
-                            new_point = task.SlotPointList[task.SlotPointIndex];
-                        }
-
-                        TaskSlots[new_point].Enqueue(task);
+                        new_point = new_point + tpoint - Total;
+                    }
+                    else
+                    {
+                        new_point += tpoint;
                     }
                 }
-            });
+                else
+                {
+                    new_point = task.SlotPointList[task.SlotPointIndex];
+                }
+
+                TaskSlots[new_point].Enqueue(task);
+            }
         }
 
         public virtual void AddTask(ITimingWheelTask task)
@@ -264,10 +262,12 @@ namespace EasyTimingWheel
             {
                 totals *= clock.Total;
             }
+
             if (totals < task.StepInterval)
             {
                 throw new Exception("total delay is too large");
             }
+
             ITimingWheel? lastClock = null;
             if (task.SlotPointList == null)
             {
@@ -286,10 +286,12 @@ namespace EasyTimingWheel
                         {
                             sdelay += tpoint;
                         }
+
                         task.SlotPointList.Add(sdelay);
                         lastClock = item;
                         break;
                     }
+
                     var npoint = sdelay % item.Total;
                     sdelay = (sdelay - npoint) / item.Total;
                     if (npoint + tpoint >= item.Total)
@@ -304,20 +306,24 @@ namespace EasyTimingWheel
 
                     task.SlotPointList.Add(npoint);
                 }
+
                 task.SlotPointIndex = task.SlotPointList.Count - 1;
             }
             else
             {
                 lastClock = clockChain[task.SlotPointIndex];
             }
+
             if (task.InitAddClock == null)
             {
                 task.InitAddClock = lastClock;
             }
+
             if (lastClock == null)
             {
                 throw new Exception();
             }
+
             lastClock.AddWaitTask(task);
         }
 
@@ -334,10 +340,7 @@ namespace EasyTimingWheel
                 Point = DefaultPoint;
                 if (SubClock.Count > 0)
                 {
-                    Parallel.ForEach(SubClock, clock =>
-                    {
-                        clock.Forward();
-                    });
+                    Parallel.ForEach(SubClock, clock => { clock.Forward(); });
                 }
             }
             else
@@ -351,25 +354,13 @@ namespace EasyTimingWheel
     {
         public string Cron { get; set; }
 
-        private bool _isInit = true;
         private int _initStepInterval;
-        public override int StepInterval
+
+        public override int StepInterval => _initStepInterval;
+
+        public void UpdateNextInterval()
         {
-            get
-            {
-                if (_isInit)
-                {
-                    _isInit = false;
-                    return _initStepInterval;
-                }
-                else
-                {
-                    return GetNextExecutionTimeTotalSeconds(Cron);
-                }
-            }
-            set
-            {
-            }
+            _initStepInterval = GetNextExecutionTimeTotalSeconds(Cron);
         }
 
         private ITimingWheel _YClock;
@@ -382,14 +373,16 @@ namespace EasyTimingWheel
         private int GetNextExecutionTimeTotalSeconds(string cron)
         {
             var cronExpression = CronExpression.Parse(cron, CronFormat.IncludeSeconds);
-            var dateTime = new DateTime(_YClock.Point, _MClock.Point, _DClock.Point, _hClock.Point, _mClock.Point, _sClock.Point, DateTimeKind.Utc);
+            var dateTime = new DateTime(_YClock.Point, _MClock.Point, _DClock.Point, _hClock.Point, _mClock.Point,
+                _sClock.Point, DateTimeKind.Utc);
             var nextTime = cronExpression.GetNextOccurrence(dateTime)!.Value;
             var ret = (int)(nextTime - dateTime).TotalSeconds;
             return ret;
         }
 
-        public TimingWheelCronTask(string name, string cron, ITimingWheel[] clockChain, TWTaskEvent callback, params object?[]? taskValue) :
-            base(name, 0, callback, taskValue)
+        public TimingWheelCronTask(string name, string cron, ITimingWheel[] clockChain, TWTaskEvent callback,
+            params object?[]? taskValue) :
+            base(name, 1, callback, taskValue)
         {
             Cron = cron;
             TaskValue = taskValue;
@@ -399,7 +392,7 @@ namespace EasyTimingWheel
             _hClock = clockChain[3];
             _mClock = clockChain[4];
             _sClock = clockChain[5];
-            _initStepInterval = GetNextExecutionTimeTotalSeconds(cron);
+            UpdateNextInterval();
         }
     }
 
@@ -413,21 +406,21 @@ namespace EasyTimingWheel
 
         public virtual int StepInterval
         {
-            get
-            {
-                return _stepInterval;
-            }
+            get { return _stepInterval; }
             set
             {
                 if (value <= 0)
                 {
                     throw new Exception("the minimum step interval is 1");
                 }
+
                 _stepInterval = value;
             }
         }
 
         public virtual TWTaskEvent? TaskCallback { get; set; } = null;
+        
+        public Action<Exception>? TaskExceptionCallback { get; set; } = null;
 
         public virtual object?[]? TaskValue { get; set; } = null;
 
@@ -499,6 +492,8 @@ namespace EasyTimingWheel
         int StepInterval { get; set; }
 
         TWTaskEvent? TaskCallback { get; set; }
+
+        Action<Exception>? TaskExceptionCallback { get; set; }
 
         object?[]? TaskValue { get; set; }
 
